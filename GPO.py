@@ -195,17 +195,18 @@ class Agent(nn.Module):
       advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-5)
     
     # Guider RL loss
+    rho = torch.exp(guider_action_log_probs - behaviour_action_log_probs)
     if self.use_clip:
-      rho = torch.exp((guider_action_log_probs - learner_action_log_probs.detach()).clip(
+      rho_clip = torch.exp((guider_action_log_probs - learner_action_log_probs.detach()).clip(
                         torch.log(1 - self.eps), 
                         torch.log(1 + self.eps)) \
                        + learner_action_log_probs.detach() - behaviour_action_log_probs)
+      rho_clip = rho_clip.clip(1 - self.epsilon,1 + self.epsilon)
     else:
-      rho = torch.exp(guider_action_log_probs - behaviour_action_log_probs)
+      rho_clip = rho.clip(1 - self.epsilon,1 + self.epsilon)
 
-    rho_s = rho.clip(1 - self.epsilon,1 + self.epsilon)
     surrogate_loss1 = rho * advantages
-    surrogate_loss2 = rho_s * advantages
+    surrogate_loss2 = rho_clip * advantages
     guider_policy_loss = -torch.mean(torch.minimum(surrogate_loss1, surrogate_loss2))
 
     # Learner RL loss
