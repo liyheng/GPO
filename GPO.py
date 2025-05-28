@@ -132,6 +132,7 @@ class Agent(nn.Module):
           1 - termination[ti]) * truncation_mask[ti] * self.lambda_ * acc
       vs_minus_v_xs[ti] = acc
 
+    # Add V(x_s) to get v_s.
     vs = vs_minus_v_xs + values
     vs_t_plus_1 = torch.cat([vs[1:], torch.unsqueeze(bootstrap_value, 0)], 0)
     advantages = (reward + self.discounting *
@@ -148,10 +149,12 @@ class Agent(nn.Module):
 
   @torch.jit.export
   def stable_exp(self, x):
+    """Clamped exp function"""
     return torch.exp(torch.clamp(x, max=10))
   
   @torch.jit.export
   def loss(self, td: Dict[str, torch.Tensor], kl_coef: float):
+    # Normalize two observations together
     observation = self.normalize(td['observation'])
     pobservation = self.normalize(td['pobservation'])
     guider_policy_logits = self.policy(observation[:-1])
@@ -170,6 +173,7 @@ class Agent(nn.Module):
     guider_action_log_probs = self.dist_log_prob(loc_guider, scale_guider, td['action'])
     loc_learner, scale_learner = self.dist_create(learner_policy_logits)
     learner_action_log_probs = self.dist_log_prob(loc_learner, scale_learner, td['action'])
+    
     # KL loss for guider and learner
     kl_loss_learner = self.kl_divergence(loc_guider.detach(), scale_guider.detach(), loc_learner, scale_learner)
     kl_loss_learner = torch.mean(kl_loss_learner)
@@ -177,7 +181,7 @@ class Agent(nn.Module):
     if self.use_clip:
       m = torch.where(guider_action_log_probs - learner_action_log_probs > torch.log(1 + self.eps), 1., 
                       torch.where(guider_action_log_probs - learner_action_log_probs<torch.log(1 - self.eps), 1., 0.))
-      kl_loss_guider = torch.mean(kl_loss_guider*m)
+      kl_loss_guider = torch.mean(kl_loss_guider * m)
     else:
       kl_loss_guider = torch.mean(kl_loss_guider) * kl_coef
 
@@ -205,6 +209,7 @@ class Agent(nn.Module):
     guider_policy_loss = -torch.mean(torch.minimum(surrogate_loss1, surrogate_loss2))
 
     # Learner RL loss
+    # Avoid numerical instability when learner is not able to follow behaviour policy
     rho = self.stable_exp(learner_action_log_probs - behaviour_action_log_probs)
     rho_clip = rho.clip(1 - self.epsilon, 1 + self.epsilon)
     surrogate_loss1 = rho * advantages
@@ -218,6 +223,8 @@ class Agent(nn.Module):
     # Entropy reward
     entropy = torch.mean(self.dist_entropy(loc, scale))
     entropy_loss = self.entropy_cost * -entropy
+
+    # Total loss
     if self.use_clip:
       learner_loss = kl_loss_learner + learner_policy_loss * self.alpha 
     else:
@@ -246,8 +253,9 @@ def eval_unroll(agent, env, length):
   episodes = torch.zeros((), device=agent.device)
   episode_reward = torch.zeros((), device=agent.device)
   for _ in range(length):
+    # make sure only partial observations are used
     _, action = agent.get_logits_action(pobservation)
-    _, pobservation, reward, done, _ = env.step(Agent.dist_postprocess(action))
+    _, pobservation, reward, done, info = env.step(Agent.dist_postprocess(action))
     episodes += torch.sum(done)
     episode_reward += torch.sum(reward)
   return episodes, episode_reward / episodes
@@ -266,7 +274,7 @@ def train_unroll(agent, env, observation, pobservation, num_unrolls, unroll_leng
       one_unroll.action.append(action)
       one_unroll.reward.append(reward)
       one_unroll.done.append(done)
-      one_unroll.truncation.append(info)
+      one_unroll.truncation.append(info['truncation'])
     one_unroll = sd_map(torch.stack, one_unroll)
     sd = sd_map(lambda x, y: x + [y], sd, one_unroll)
   td = sd_map(torch.stack, sd)
@@ -288,14 +296,13 @@ def train(
     discounting: float = .99,
     learning_rate: float = 3e-4,
     seed: int = 0,
-    stack_frames: int = 1,
     target_kl: float = 0.01,
     eps: float = 0.3,
     alpha: float = 2.,
     use_clip: bool = True,
 ):
   """Trains a policy via PPO."""
-  env = create(env_name, batch_size=num_envs, seed=seed, stack_frames=stack_frames, Guided=True)
+  env = create(env_name, batch_size=num_envs, episode_length=episode_length, seed=seed, device=device)
   folder_path = Path(env_name)
   folder_path.mkdir(parents=True, exist_ok=True)
   filename = env_name + '/' + str(seed)
@@ -331,7 +338,7 @@ def train(
     num_epochs = num_timesteps // (num_steps * eval_frequency)
     num_unrolls = batch_size * num_minibatches // env.num_envs
     for epoch in range(num_epochs):
-      observation, pobservation,td = train_unroll(agent, env, observation, pobservation, num_unrolls,
+      observation, pobservation, td = train_unroll(agent, env, observation, pobservation, num_unrolls,
                                      unroll_length)
 
       # make unroll first
@@ -341,6 +348,7 @@ def train(
       td = sd_map(unroll_first, td)
 
       # update normalization statistics
+      # NOTE: We choose to normalize observations and partial observations together, but they can also be done separately
       agent.update_normalization(td.observation)
       agent.update_normalization(td.pobservation)
       for _ in range(num_update_epochs):
@@ -406,7 +414,6 @@ if __name__ == "__main__":
         discounting = args.discounting,
         learning_rate = args.learning_rate,
         seed = args.seed,
-        stack_frames = args.stack_frames,
         target_kl = args.target_kl,
         eps = args.eps,
         alpha = args.alpha,
