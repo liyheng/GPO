@@ -3,7 +3,7 @@ env=StatelessHalfcheetah
 #env=NoisyStatelessHalfcheetahEasy
 #env=NoisyStatelessHalfcheetahMedium
 #env=NoisyStatelessHalfcheetahHard
-seed_max=10
+seed_max=20
 for seed in `seq ${seed_max}`; do
     echo "seed is ${seed}:"
     CUDA_VISIBLE_DEVICES=0 ../python GPO.py --env_name ${env} --seed ${seed} \
