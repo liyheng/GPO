@@ -304,6 +304,7 @@ def train(
 ):
   """Trains a policy via PPO."""
   env = create(env_name, batch_size=num_envs, episode_length=episode_length, seed=seed, device=device)
+  env_name = '../results/' + env_name
   folder_path = Path(env_name)
   folder_path.mkdir(parents=True, exist_ok=True)
   filename = env_name + '/' + str(seed)
@@ -330,7 +331,6 @@ def train(
     with torch.no_grad():
       episode_count, episode_reward = eval_unroll(agent, env, episode_length)
       writer.add_scalar("charts/episodic_return", episode_reward, total_steps)
-      print(episode_reward)
     if eval_i == eval_frequency:
       break
 
