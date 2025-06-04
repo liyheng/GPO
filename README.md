@@ -36,7 +36,7 @@ cd scripts
 chmod +x ./train_ant.sh
 ./train_ant.sh
 ```
-Training logs and results will be saved in the directory structure: `env_name/seed/`. You can view progress using **TensorBoard**.
+Training logs and results will be saved in the directory structure: `results/env_name/seed/`. You can view progress using **TensorBoard**.
 
 ## 📖 Citation
 If you find this repository or GPO useful in your research, please consider citing our paper:
